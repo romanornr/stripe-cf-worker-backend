@@ -4,3 +4,7 @@ compatibility_date = "2025-02-26"
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
+
+[dev]
+port = 4242
+local_protocol = "http"
