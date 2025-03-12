@@ -34,3 +34,12 @@ node_modules
 
 # Local development variables.
 .dev.vars
+
+# Ignore Rust build artifacts
+/target/
+
+# Ignore distribution build files if they are generated and not needed in version control
+/dist/
+
+# Ignore the prompt file
+claude-agentic-guide.md
