@@ -40,11 +40,46 @@ pub fn error_response(message: &str, status: u16) -> Result<Response>{
     Response::error(json_string, status)
 }
 
+// -------- Stripe Client implementation --------
+
+#[derive(Debug, Clone)]
+pub struct StripeClient {
+    api_key: String,
+    base_url: String,
+}
+
+impl StripeClient {
+    pub fn new(api_key: &str) -> Self {
+        Self {
+            api_key: api_key.to_string(),
+            base_url: "https://api.stripe.com/v1".to_string(),
+        }
+    }
+}
+
+async fn test_stripe_client() -> Result<Response> {
+    let client = StripeClient::new("sk_test_4eC39HqLyjWDarjtT1zdp7dc"); // not a real api key
+
+    // for display purpose,mask the api key by showing the first 7 digits and last 4 characters
+    let key_str = client.api_key;
+    let masked_key = format!("{}...{}", &key_str[..7], &key_str[key_str.len()-4..]);
+
+    success_response(format!(
+        "StripeClient created with the base URL: {} and API key: {}",
+        client.base_url, masked_key
+    ))
+}
+
 // A simple test endpoint to verify response helpers
 // The #[event(fetch)] attribute marks this as the function that hat handles HTTP requests
 #[event(fetch)]
-pub async fn main(_req: Request, _env: Env, _ctx: Context) -> Result<Response> {
-    // we return a success response with a simple message
-    success_response("Response helpers are working!")
+pub async fn main(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
+    let path = req.path();
+
+    match path.as_str() {
+        "/test" => success_response("Response helpers are working!"),
+        "/test_stripe" => test_stripe_client().await,
+        _ => error_response("Not Found", 404)
+    }
 }
 
