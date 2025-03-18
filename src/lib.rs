@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+use std::fmt::format;
 use worker::*;
 use serde::{Serialize, Deserialize};
-use serde_json::json;
+use http::StatusCode; // make sure to import the http crate
+
 
 // Define a generic response struct to wrap any successful data
 // The generic type T allows to wrap any type that elements Serialize
@@ -53,6 +56,95 @@ impl StripeClient {
         Self {
             api_key: api_key.to_string(),
             base_url: "https://api.stripe.com/v1".to_string(),
+        }
+    }
+
+    // Send a post request to the specified Stripe API path with form-encoded data
+    pub async fn post<T: Serialize, U: for<'de> Deserialize<'de>>(&self, path: &str, data: &T, ) -> worker::Result<U> {
+    // Build the full URL by concatenating the base URL with the provided path
+    let url = format!("{}{}", self.base_url, path);
+
+    // create ans setup the headers. Stripe requires an Authorization header and the content type to be "application/x-www-form-urlencoded"
+    let mut headers = Headers::new();
+    headers.set("Authorization", &format!("Bearer {}", self.api_key))?; // set the Authorization header
+    headers.set("Content-Type", "application/x-www-form-urlencoded")?; // set the content type header
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers);
+
+    // Serialize the data into the URL-encoded form parameters
+    let form_data = serde_urlencoded::to_string(data)
+        .map_err(|e| worker::Error::RustError(e.to_string()))?;
+
+    console_log!("Sending POST request to {} with data: {}", url, form_data);
+
+    // Attach the serialized data as the body of the request
+    init.with_body(Some(form_data.into()));
+
+    // create teh request and set it
+    let req = Request::new_with_init(&url, &init)?;
+    let mut resp = Fetch::Request(req).send().await?;
+
+    // Retrieve the HTTP status code and the response body as text
+    let status = resp.status_code();
+    let json_text = resp.text().await?;
+
+    console_log!("Response status code: {}, body:{}", status, json_text);
+
+    // if the response status indicates success (200 - 299)
+    // try to describe the response JSON into the expected type U
+    if (200..300).contains(&status) {
+        serde_json::from_str::<U>(&json_text).map_err(|e| worker::Error::RustError(format!("JSON parse error: {}", e)))
+    } else {
+        Err(worker::Error::RustError(format!("Stripe API error (status {}): {}", status, json_text)))
+    }
+  }
+
+    pub async fn get<T: for<'de> Deserialize<'de>>(&self, path: &str, query_params: Option<HashMap<String, String>>) -> worker::Result<T> {
+        // Parse the base URL from the client's base_url field and join it with the provided path
+        let mut url = Url::parse(&self.base_url)
+            .and_then(|base| base.join(path))
+            .map_err(|e|worker::Error::RustError(e.to_string()))?;
+
+        // Append query parameters, if any, using the URL's query_pairs mut method
+        if let Some(params) = query_params {
+            let mut pairs = url.query_pairs_mut();
+            for (key, value) in params {
+                pairs.append_pair(&key, &value);
+            }
+        }
+        console_log!("Get request to {}", url.as_str());
+
+        // Set up the necessary headers for the request
+        let mut headers = Headers::new();
+        headers.set("Authorization", &format!("Bearer {}", self.api_key))?;
+
+        // Initialize the request with the GET method and headers
+        let mut init = RequestInit::new();
+        init.with_method(Method::Get)
+            .with_headers(headers);
+
+        // Create a new request using the constructed URL and initialization options
+        let req = Request::new_with_init(url.as_str(), &init)?;
+        // Send the request asynchronously and await the response
+        let mut resp = Fetch::Request(req).send().await?;
+
+        // Retrieve the HTTP status code and response body
+        let status = resp.status_code();
+        let json_text = resp.text().await?;
+        console_log!("Response status code {}, body: {}", status, json_text);
+
+        // Convert raw status code into a StatusCode type for checking success
+        let status_code = StatusCode::from_u16(status)
+            .map_err(|e| worker::Error::RustError(format!("Invalid status code: {}", e)))?;
+
+        // If the status is success, deserialize the JSON text into type T
+        // Otherwise return an error with the status code and response text
+        match status_code.is_success() {
+            true => serde_json::from_str::<T>(&json_text)
+                .map_err(|e| worker::Error::RustError(format!("JSON parse error {}", e))),
+            false => Err(worker::Error::RustError(format!("Stripe API error (status {}): {}", status, json_text)))
         }
     }
 }
