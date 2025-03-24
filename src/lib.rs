@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::fmt::format;
 use worker::*;
 use serde::{Serialize, Deserialize};
-use http::StatusCode; // make sure to import the http crate
+use http::StatusCode;
+use serde_json::json;
+// make sure to import the http crate
 
 
 // Define a generic response struct to wrap any successful data
@@ -42,6 +44,31 @@ pub fn error_response(message: &str, status: u16) -> Result<Response>{
 
     Response::error(json_string, status)
 }
+
+// -------- Stripe data structures --------
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreatePaymentIntentRequest {
+    pub amount: i64,
+    pub currency: String,
+    // These fields are optional, so we only include them if provided
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payment_method_types: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capture_method: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaymentIntent {
+    pub id: String,
+    pub object: String,
+    pub amount: i64,
+    pub currency: String,
+    pub status: String,
+    pub client_secret: String,
+    pub capture_method: String,
+}
+
 
 // -------- Stripe Client implementation --------
 
@@ -149,6 +176,48 @@ impl StripeClient {
     }
 }
 
+async fn create_payment_intent(env: Env, mut req: Request) -> Result<Response> {
+    // Load the Stripe secret API key from the environment secrets
+    let stripe_key = match env.secret("STRIPE_SECRET_KEY") {
+        Ok(key) => key.to_string(),
+        Err(e) => return error_response(&format!("Failed to load Stripe secret key: {}", e), 500),
+    };
+
+    // Create an instance of StripeClient using the API key
+    let stripe_client = StripeClient::new(&stripe_key);
+
+    // Deserialize the incoming JSON into our CreatePaymentIntentRequest struct
+    let request_data = match req.json::<CreatePaymentIntentRequest>().await {
+        Ok(data) => data,
+        Err(e) => return error_response(&format!("Invalid request data: {}", e), 400),
+    };
+
+    // Build the paramaters for the Stripe API request
+    // We use a Hashmap to build the URL-encoded from parameters
+    let mut params = std::collections::HashMap::new();
+    params.insert("amount".to_string(), request_data.amount.to_string());
+    params.insert("currency".to_string(), request_data.currency.clone());
+    // Stripe expects "payment_method_types[]" as a key when sending payment
+    params.insert("payment_method_types[]".to_string(), "card".to_string());
+    // Set capture method to "automatic" adjust as needed
+    params.insert("capture_method".to_string(), "automatic".to_string());
+
+    console_log!("Payment intent request parameters: {:?}", params);
+
+    // send a POST request to Stripe's /payment_intents endpoint
+    match stripe_client.post::<_, PaymentIntent>("/payment_intents", &params).await {
+        Ok(payment_intent) => {
+            // on success, return the paymentIntent into a JSON success response
+            success_response(payment_intent)
+        },
+        Err(e) => {
+            // Log the error and return an error response
+            console_error!("Error creating payment intent: {}", e);
+            error_response(&format!("Failed to create a payment intent: {}", e), 500)
+        }
+    }
+}
+
 async fn test_stripe_client() -> Result<Response> {
     let client = StripeClient::new("sk_test_4eC39HqLyjWDarjtT1zdp7dc"); // not a real api key
 
@@ -165,12 +234,13 @@ async fn test_stripe_client() -> Result<Response> {
 // A simple test endpoint to verify response helpers
 // The #[event(fetch)] attribute marks this as the function that hat handles HTTP requests
 #[event(fetch)]
-pub async fn main(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
+pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let path = req.path();
 
     match path.as_str() {
         "/test" => success_response("Response helpers are working!"),
         "/test_stripe" => test_stripe_client().await,
+        "/create-payment-intent" => create_payment_intent(env, req).await,
         _ => error_response("Not Found", 404)
     }
 }
