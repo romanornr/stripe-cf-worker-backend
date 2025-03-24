@@ -259,6 +259,19 @@ async fn get_recent_payment_intents(env: Env) -> Result<Response> {
     }
 }
 
+async fn get_location_id(env: Env) -> Result<Response> {
+    match env.secret("LOCATION_ID") {
+        Ok(location_id) => {
+            // convert the retrieved secret into a string
+            let location_data = json!({ "location_id" : location_id.to_string()});
+            success_response(location_data)
+        },
+        Err(e) => {
+            error_response(&format!("Failed to load location ID: {}", e), 500)
+        }
+    }
+}
+
 // A simple test endpoint to verify response helpers
 // The #[event(fetch)] attribute marks this as the function that hat handles HTTP requests
 #[event(fetch)]
@@ -270,6 +283,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         "/test_stripe" => test_stripe_client().await,
         "/create-payment-intent" => create_payment_intent(env, req).await,
         "/get-recent-payment-intents" => get_recent_payment_intents(env).await,
+        "/get-location-id" => get_location_id(env).await,
         _ => error_response("Not Found", 404)
     }
 }
