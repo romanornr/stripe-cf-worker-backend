@@ -3,6 +3,7 @@ use std::fmt::format;
 use worker::*;
 use serde::{Serialize, Deserialize};
 use http::StatusCode;
+use js_sys::Reflect::get;
 use serde_json::json;
 // make sure to import the http crate
 
@@ -69,6 +70,13 @@ pub struct PaymentIntent {
     pub capture_method: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaymentIntentList {
+    pub object: String,
+    pub url: String,
+    pub has_more: bool,
+    pub data: Vec<PaymentIntent>
+}
 
 // -------- Stripe Client implementation --------
 
@@ -82,7 +90,7 @@ impl StripeClient {
     pub fn new(api_key: &str) -> Self {
         Self {
             api_key: api_key.to_string(),
-            base_url: "https://api.stripe.com/v1".to_string(),
+            base_url: "https://api.stripe.com/v1/".to_string(),
         }
     }
 
@@ -231,6 +239,26 @@ async fn test_stripe_client() -> Result<Response> {
     ))
 }
 
+async fn get_recent_payment_intents(env: Env) -> Result<Response> {
+    let stripe_key = match env.secret("STRIPE_SECRET_KEY") {
+        Ok(key) => key.to_string(),
+        Err(e) => return error_response(&format!("Failed to load Stripe secret key: {}", e), 500),
+    };
+
+    // create an instance of StripeClient using the API key
+    let stripe_client = StripeClient::new(&stripe_key);
+
+    // build query parameters: limit the number of payment intents to 10
+    let mut params = HashMap::new();
+    params.insert("limit".to_string(), "10".to_string());
+
+    // Use the GET method on the StripeClient to request the PaymentIntentList
+    match stripe_client.get::<PaymentIntentList>("payment_intents", Some(params)).await {
+        Ok(payment_intents) => success_response(payment_intents),
+        Err(e) => error_response(&format!("Failed to list payment intents: {}", e), 500),
+    }
+}
+
 // A simple test endpoint to verify response helpers
 // The #[event(fetch)] attribute marks this as the function that hat handles HTTP requests
 #[event(fetch)]
@@ -241,6 +269,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         "/test" => success_response("Response helpers are working!"),
         "/test_stripe" => test_stripe_client().await,
         "/create-payment-intent" => create_payment_intent(env, req).await,
+        "/get-recent-payment-intents" => get_recent_payment_intents(env).await,
         _ => error_response("Not Found", 404)
     }
 }
