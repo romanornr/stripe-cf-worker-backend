@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::fmt::format;
-use std::fs::Metadata;
 use worker::*;
 use serde::{Serialize, Deserialize};
 use http::StatusCode;
@@ -160,7 +158,8 @@ impl StripeClient {
     let status = resp.status_code();
     let json_text = resp.text().await?;
 
-    console_log!("Response status code: {}, body:{}", status, json_text);
+    // Only log the status code and redact the body for security
+    console_log!("Response status code: {}", status);
 
     // if the response status indicates success (200 - 299)
     // try to describe the response JSON into the expected type U
@@ -203,7 +202,8 @@ impl StripeClient {
         // Retrieve the HTTP status code and response body
         let status = resp.status_code();
         let json_text = resp.text().await?;
-        console_log!("Response status code {}, body: {}", status, json_text);
+        // Only log the status code for security
+        console_log!("Response status code {}", status);
 
         // Convert raw status code into a StatusCode type for checking success
         let status_code = StatusCode::from_u16(status)
@@ -322,16 +322,7 @@ async fn create_connection_token(env: Env) -> Result<Response> {
 
     match stripe_client.post::<_, TerminalConnectionToken>("terminal/connection_tokens", &request).await {
         Ok(token) => {
-            let masked_secret = if token.secret.len() > 7 {
-                format!("{}...{}", &token.secret[..7], &token.secret[token.secret.len()-4..])
-            } else {
-                "********".to_string()
-            };
-
-            console_log!("Connection token created with secret: {}", masked_secret);
-
-            let token_data = json!({ "secret": token.secret });
-            success_response(token_data)
+            success_response(token)
         }
         Err(e) => {
             console_error!("Error creating connection token: {}", e);
@@ -359,7 +350,7 @@ async fn get_reader_id(env: Env) -> Result<Response> {
             let maybe_loc = locations.data.into_iter().find(|loc| loc.id == location_id);
 
             match maybe_loc {
-                Some(location) => {
+                Some(_) => {
                     // If found, return the location ID in a success response
                     success_response(location_id)
                 }
