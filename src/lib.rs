@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 use std::fmt::format;
+use std::fs::Metadata;
 use worker::*;
 use serde::{Serialize, Deserialize};
 use http::StatusCode;
-use js_sys::Reflect::get;
 use serde_json::json;
-// make sure to import the http crate
-
 
 // Define a generic response struct to wrap any successful data
 // The generic type T allows to wrap any type that elements Serialize
@@ -78,6 +76,43 @@ pub struct PaymentIntentList {
     pub data: Vec<PaymentIntent>
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TerminalConnectionToken {
+    pub object: String,
+    pub secret: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct CreateTerminalConnectionTokenRequest{}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Address {
+    pub city: Option<String>,
+    pub country: Option<String>,
+    pub line1: Option<String>,
+    pub line2: Option<String>,
+    pub postal_code: Option<String>,
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TerminalLocation {
+    pub id: String,
+    pub object: String,
+    pub display_name: Option<String>,
+    pub address: Option<Address>,
+    pub livemode: bool,
+    //pub metadata: Metadata
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TerminalLocationList {
+    pub object: String,
+    pub data: Vec<TerminalLocation>,
+    pub has_more: bool,
+    pub url: String,
+}
+
 // -------- Stripe Client implementation --------
 
 #[derive(Debug, Clone)]
@@ -99,7 +134,7 @@ impl StripeClient {
     // Build the full URL by concatenating the base URL with the provided path
     let url = format!("{}{}", self.base_url, path);
 
-    // create ans setup the headers. Stripe requires an Authorization header and the content type to be "application/x-www-form-urlencoded"
+    // create and setup the headers. Stripe requires an Authorization header and the content type to be "application/x-www-form-urlencoded"
     let mut headers = Headers::new();
     headers.set("Authorization", &format!("Bearer {}", self.api_key))?; // set the Authorization header
     headers.set("Content-Type", "application/x-www-form-urlencoded")?; // set the content type header
@@ -200,7 +235,7 @@ async fn create_payment_intent(env: Env, mut req: Request) -> Result<Response> {
         Err(e) => return error_response(&format!("Invalid request data: {}", e), 400),
     };
 
-    // Build the paramaters for the Stripe API request
+    // Build the parameters for the Stripe API request
     // We use a Hashmap to build the URL-encoded from parameters
     let mut params = std::collections::HashMap::new();
     params.insert("amount".to_string(), request_data.amount.to_string());
@@ -272,6 +307,75 @@ async fn get_location_id(env: Env) -> Result<Response> {
     }
 }
 
+async fn create_connection_token(env: Env) -> Result<Response> {
+    // Retrieve the Stripe secret API key from the environment secrets
+    let stripe_key = match env.secret("STRIPE_SECRET_KEY") {
+        Ok(key) => key.to_string(),
+        Err(e) => return error_response(&format!("Failed to load Stripe secret key: {}", e), 500),
+    };
+
+    // Create an instance of StripeClient using the API key
+    let stripe_client = StripeClient::new(&stripe_key);
+
+    // create a default request object for the connection token
+    let request = CreateTerminalConnectionTokenRequest::default();
+
+    match stripe_client.post::<_, TerminalConnectionToken>("terminal/connection_tokens", &request).await {
+        Ok(token) => {
+            let masked_secret = if token.secret.len() > 7 {
+                format!("{}...{}", &token.secret[..7], &token.secret[token.secret.len()-4..])
+            } else {
+                "********".to_string()
+            };
+
+            console_log!("Connection token created with secret: {}", masked_secret);
+
+            let token_data = json!({ "secret": token.secret });
+            success_response(token_data)
+        }
+        Err(e) => {
+            console_error!("Error creating connection token: {}", e);
+            error_response(&format!("Failed to create a connection token: {}", e), 500)
+        }
+    }
+}
+
+async fn get_reader_id(env: Env) -> Result<Response> {
+    let stripe_key = match env.secret("STRIPE_SECRET_KEY") {
+        Ok(key) => key.to_string(),
+        Err(e) => return error_response(&format!("Failed to load Stripe secret key: {}", e), 500),
+    };
+
+    let location_id = match env.secret("LOCATION_ID") {
+        Ok(id) => id.to_string(),
+        Err(e) => return error_response(&format!("Failed to load location ID: {}", e), 500),
+    };
+
+    let stripe_client = StripeClient::new(&stripe_key);
+
+    match stripe_client.get::<TerminalLocationList>("terminal/locations", None).await {
+        Ok(locations) => {
+            // Look for the location that matches the provided location ID
+            let maybe_loc = locations.data.into_iter().find(|loc| loc.id == location_id);
+
+            match maybe_loc {
+                Some(location) => {
+                    // If found, return the location ID in a success response
+                    success_response(location_id)
+                }
+                None => {
+                    // If not found, return an error response
+                    error_response(&format!("Location ID {} not found", location_id), 404)
+                }
+            }
+        }
+        Err(e) => {
+            // If GET request fails return an error response
+            error_response(&format!("Failed to list terminal locations: {}", e), 500)
+        }
+    }
+}
+
 // A simple test endpoint to verify response helpers
 // The #[event(fetch)] attribute marks this as the function that hat handles HTTP requests
 #[event(fetch)]
@@ -284,7 +388,8 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         "/create-payment-intent" => create_payment_intent(env, req).await,
         "/get-recent-payment-intents" => get_recent_payment_intents(env).await,
         "/get-location-id" => get_location_id(env).await,
+        "/readers/id" => get_reader_id(env).await,
+        "/connection-token" => create_connection_token(env).await,
         _ => error_response("Not Found", 404)
     }
 }
-
