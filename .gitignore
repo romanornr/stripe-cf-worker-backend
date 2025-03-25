@@ -41,5 +41,5 @@ node_modules
 # Ignore distribution build files if they are generated and not needed in version control
 /dist/
 
-# Ignore the prompt file
-***REMOVED***
+# Ignore build files because they are generated and not needed in version control
+/build/
