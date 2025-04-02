@@ -3,6 +3,7 @@ use worker::*;
 use serde::{Serialize, Deserialize};
 use http::StatusCode;
 use serde_json::json;
+use worker::ResponseBody::Empty;
 
 // Define a generic response struct to wrap any successful data
 // The generic type T allows to wrap any type that elements Serialize
@@ -110,6 +111,48 @@ pub struct TerminalLocationList {
     pub has_more: bool,
     pub url: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct TerminalReader {
+    pub id: String,
+    pub object: String,
+    pub action: Option<ReaderAction>,
+    pub device_sw_version: Option<String>,
+    pub device_type: Option<String>,
+    pub ip_address: Option<String>,
+    pub label: Option<String>,
+    pub last_seen_at: Option<i64>,
+    pub livemode: bool,
+    pub location: Option<String>,
+    pub metadata: Option<HashMap<String, String>>,
+    pub serial_number: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TerminalReaderList {
+    pub object: String,
+    pub data: Vec<TerminalReader>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReaderAction {
+    pub reader_id: String,
+    pub action: String, // For example "cancel"
+    pub status: String,
+    pub r#type: String,
+    pub failure_code: Option<String>,
+    pub failure_message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CancelActionRequest {
+    pub reader_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct EmptyRequest {}
 
 // -------- Stripe Client implementation --------
 
@@ -367,6 +410,43 @@ async fn get_reader_id(env: Env) -> Result<Response> {
     }
 }
 
+async fn cancel_action(env: Env, mut req: Request) -> Result<Response> {
+    let stripe_key = match env.secret("STRIPE_SECRET_KEY") {
+        Ok(key) => key.to_string(),
+        Err(e) => return error_response(&format!("Failed to load Stripe secret key: {}", e), 500),
+    };
+
+    let stripe_client = StripeClient::new(&stripe_key);
+
+    let request_data = match req.json::<CancelActionRequest>().await {
+        Ok(data) => data,
+        Err(e) => return error_response(&format!("Invalid request data: {}", e), 400),
+    };
+    // Deserialize the incoming JSON into our ReaderAction struct
+    // let action_request = match req.json::<CancelActionRequest>().await {
+    //     Ok(data) => data,
+    //     Err(e) => return error_response(&format!("Invalid request data: {}", e), 400),
+    // };
+
+    // // Ensure the requested action is "cancel"
+    // if action_request.action != "cancel" {
+    //     return error_response("Invalid action. Only 'cancel' is supported.", 400);
+    // }
+
+    let url = format!("terminal/readers/{}/cancel_action", request_data.reader_id);
+
+    match stripe_client.post::<_, TerminalReader>(&url, &EmptyRequest::default()).await {
+        Ok(reader) => {
+            let response = json!({ "reader_state" : reader});
+            success_response(response)
+        },
+        Err(e) => {
+            console_error!("Error cancelling action: {}", e);
+            error_response(&format!("Failed to cancel action: {}", e), 500)
+        }
+    }
+}
+
 // A simple test endpoint to verify response helpers
 // The #[event(fetch)] attribute marks this as the function that hat handles HTTP requests
 #[event(fetch)]
@@ -381,6 +461,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         "/get-location-id" => get_location_id(env).await,
         "/readers/id" => get_reader_id(env).await,
         "/connection-token" => create_connection_token(env).await,
+        "/cancel-action" => cancel_action(env, req).await,
         _ => error_response("Not Found", 404)
     }
 }
