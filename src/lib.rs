@@ -293,7 +293,7 @@ async fn create_payment_intent(env: Env, mut req: Request) -> Result<Response> {
     params.insert("amount".to_string(), request_data.amount.to_string());
     params.insert("currency".to_string(), request_data.currency.clone());
     // Stripe expects "payment_method_types[]" as a key when sending payment
-    params.insert("payment_method_types[]".to_string(), "card".to_string());
+    params.insert("payment_method_types[]".to_string(), "card_present".to_string());
     // Set capture method to "automatic" adjust as needed
     params.insert("capture_method".to_string(), "automatic".to_string());
 
