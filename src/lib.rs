@@ -3,7 +3,6 @@ use worker::*;
 use serde::{Serialize, Deserialize};
 use http::StatusCode;
 use serde_json::json;
-use worker::ResponseBody::Empty;
 
 // Define a generic response struct to wrap any successful data
 // The generic type T allows to wrap any type that elements Serialize
@@ -20,6 +19,14 @@ pub struct ErrorResponse {
     error: Option<String>
 }
 
+fn add_cors_headers(mut response: Response) -> Result<Response> {
+    let headers = response.headers_mut();
+    headers.set("Access-Control-Allow-Origin", "*")?;
+    headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")?;
+    headers.set("Access-Control-Allow-Headers", "Content-Type")?;
+    Ok(response)
+}
+
 // A helper function to create a successful JSON response
 // It takes any serialize data, wraps it in our ApiResponse struct and covers it into a JSON response
 pub fn success_response<T: Serialize>(data: T) -> Result<Response> {
@@ -27,7 +34,8 @@ pub fn success_response<T: Serialize>(data: T) -> Result<Response> {
         data: Some(data),
         error: None,
     };
-    Response::from_json(&resp)
+    let response = Response::from_json(&resp)?;
+    add_cors_headers(response)
 }
 
 pub fn error_response(message: &str, status: u16) -> Result<Response>{
@@ -40,7 +48,8 @@ pub fn error_response(message: &str, status: u16) -> Result<Response>{
     let json_string = serde_json::to_string(&error_obj)
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
 
-    Response::error(json_string, status)
+    let response = Response::error(json_string, status)?;
+    add_cors_headers(response)
 }
 
 // -------- Stripe data structures --------
@@ -291,7 +300,7 @@ async fn create_payment_intent(env: Env, mut req: Request) -> Result<Response> {
     console_log!("Payment intent request parameters: {:?}", params);
 
     // send a POST request to Stripe's /payment_intents endpoint
-    match stripe_client.post::<_, PaymentIntent>("/payment_intents", &params).await {
+    match stripe_client.post::<_, PaymentIntent>("payment_intents", &params).await {
         Ok(payment_intent) => {
             // on success, return the paymentIntent into a JSON success response
             success_response(payment_intent)
@@ -451,6 +460,18 @@ async fn cancel_action(env: Env, mut req: Request) -> Result<Response> {
 // The #[event(fetch)] attribute marks this as the function that hat handles HTTP requests
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+
+    // Handle CORS preflight request
+    if req.method() == Method::Options {
+        let mut response = Response::empty()?;
+        let headers = response.headers_mut();
+        headers.set("Access-Control-Allow-Origin", "*")?;
+        headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")?;
+        headers.set("Access-Control-Allow-Headers", "Content-Type")?;
+        return Ok(response);
+    }
+
+
     let path = req.path();
 
     match path.as_str() {
