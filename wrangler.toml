@@ -8,3 +8,4 @@ command = "cargo install -q worker-build && worker-build --release"
 [dev]
 port = 4242
 local_protocol = "http"
+ip="192.168.2.6"

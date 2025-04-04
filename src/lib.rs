@@ -369,7 +369,10 @@ async fn create_connection_token(env: Env) -> Result<Response> {
 
     match stripe_client.post::<_, TerminalConnectionToken>("terminal/connection_tokens", &request).await {
         Ok(token) => {
-            success_response(token)
+            let response_data = json!({ "secret": token.secret });
+            Response::from_json(&response_data)
+                .map_err(|e| worker::Error::RustError(e.to_string()))
+                .and_then(|resp| add_cors_headers(resp))
         }
         Err(e) => {
             console_error!("Error creating connection token: {}", e);
